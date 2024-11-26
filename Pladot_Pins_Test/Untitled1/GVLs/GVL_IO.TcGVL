@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <GVL Name="GVL_IO" Id="{35825c94-c191-42ef-9c15-ae2b0f8aea90}">
+    <Declaration><![CDATA[
+VAR_GLOBAL
+	rCurrentHW				AT%I*	:	INT;
+	iPistonsPressureHW		AT%I* 	:	INT;
+	bRightPinLockSens		AT%I*	:	BOOL;
+	bLeftPinLockSens		AT%I*	:	BOOL;
+	bLeftPistonSens			AT%I*	: 	BOOL;
+	nRightPistonSens		AT%I*	:	BOOL;
+	bDoorInerlock			AT%I*	:	BOOL;
+	
+	iSetPistonsPressureHW	AT%Q* 	:	INT;
+	iMotorPowerHW			AT%Q*	:	INT;
+	iLeftPinForce			AT%I* 	:	INT;
+	iRightPinForce			AT%I* 	:	INT;
+	
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>

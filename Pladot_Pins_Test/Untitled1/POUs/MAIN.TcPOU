@@ -1,0 +1,383 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="MAIN" Id="{f0f64660-4416-458e-9c1d-c2a64efa1f2a}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+	ProcessTime			:	TON;
+	RunTimer			:	TON;
+	StopTimer			:	TON;
+	HoldTimer			:	TON;
+	
+	iHighPower			: 	INT;
+	iHoldPower			: 	INT;
+	TestState			:	INT;
+	CSVstate			:	INT;
+	iMotorPower			:	INT;
+	iTestCounter		:	INT;
+	iCycleToRun			:	UDINT;
+	iPistonsPressure	:	INT;
+	
+	bStartTest			:	BOOL;
+	bStopTest			:	BOOL;
+	bTimeoutError		: 	BOOL;
+	bProcessEndAtPins	: 	BOOL;
+	bProcessEndAtTimeout: 	BOOL;
+	bAutomatedOperation	:	BOOL;
+	bWriteDataEnd		: 	BOOL;
+	bReadyToRun			: 	BOOL;
+	
+	rMotorCurrenr		:	REAL;
+	rRecordMotorCurrenr	:	REAL; //csv
+	rTimeToStop			: 	REAL;
+	rHMI_MotorCurrent	: 	REAL;// By mA
+	rRightPinForce		:	REAL;
+	rLeftPinForce		:	REAL;
+	iPistonsForceHMI	:	INT;
+	
+	
+	
+	arrCurrentMessure	:	ARRAY[1..100] OF REAL;
+	arrLeftPinMessure	:	ARRAY[1..100] OF REAL;
+	arrRightPinMessure	:	ARRAY[1..100] OF REAL;
+	i					:	INT;
+
+	sDataToWrite		:	STRING[500];
+	fbFileOpen      	: 	FB_FileOpen;
+	fbFileWrite      	:	FB_FileWrite;
+	fbFileClose       	: 	FB_FileClose;
+	bKeepRuningTests: BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF bDoorInerlock THEN
+	RunTest();
+	SaveData();
+END_IF
+
+iSetPistonsPressureHW:=REAL_TO_INT(INT_TO_REAL(iPistonsForceHMI)*32.59);
+rMotorCurrenr:=(INT_TO_REAL(rCurrentHW)/32767.0)*15.0;
+rHMI_MotorCurrent:=rMotorCurrenr*1000;
+iMotorPowerHW:=real_to_int((INT_TO_REAL(iMotorPower)/100)*16383);]]></ST>
+    </Implementation>
+    <Action Name="RunTest" Id="{d20d008d-5550-4eb0-a52a-f4f7d45a45c1}">
+      <Implementation>
+        <ST><![CDATA[ProcessTime(IN:= , PT:=T#2500MS , Q=> , ET=> );
+RunTimer(IN:= , PT:=T#450MS , Q=> , ET=> );
+StopTimer(IN:= , PT:=T#50MS , Q=> , ET=> );
+HoldTimer(IN:= , PT:=T#2S , Q=> , ET=> );
+IF TestState=0 AND CSVstate=0 THEN
+	bReadyToRun:=TRUE;
+ELSE 
+	bReadyToRun:=FALSE;
+END_IF
+IF iTestCounter<=iCycleToRun THEN
+	bKeepRuningTests:=TRUE;
+ELSE
+	bKeepRuningTests:=FALSE;	
+END_IF
+
+
+
+CASE TestState OF
+	0://standby
+		ProcessTime.IN:=FALSE;
+		IF bStartTest AND NOT bStopTest AND bLeftPistonSens AND nRightPistonSens THEN
+			IF NOT bAutomatedOperation THEN
+				bStartTest:=FALSE;
+			END_IF
+			iTestCounter:=iTestCounter+1;
+			ProcessTime.IN:=TRUE;
+			bProcessEndAtPins:=FALSE;
+			bProcessEndAtTimeout:=FALSE;
+			//bReadyToRun:=FALSE;
+			i:=1;
+			TestState:=10;
+		END_IF
+	
+	10:// start movment and reach pins lock sensors
+		arrCurrentMessure[i]:=rMotorCurrenr;
+		arrLeftPinMessure[i]:=iLeftPinForce;
+		arrRightPinMessure[i]:=iRightPinForce;
+		i:=i+1;
+		IF i>100 THEN
+			i:=1;
+		END_IF
+		RunTimer.IN:=TRUE;
+		iMotorPower:=iHighPower;
+		
+		IF bLeftPinLockSens AND bRightPinLockSens THEN
+			bProcessEndAtPins:=TRUE;
+			RunTimer.IN:=FALSE;
+			iMotorPower:=iHoldPower;	
+			//StopTimer.IN:=TRUE;			
+			TestState:=20;
+		ELSIF RunTimer.Q THEN
+			bProcessEndAtTimeout:=TRUE;
+			RunTimer.IN:=FALSE;
+			iMotorPower:=0;				
+			TestState:=40;
+		END_IF	
+		
+	20: //hols pins in open position for 2 sec
+		HoldTimer.IN:=TRUE;
+		IF HoldTimer.Q THEN
+			iMotorPower:=0;
+			TestState:=30;
+			FOR i:=i TO i-5 DO
+				rRecordMotorCurrenr:=(rRecordMotorCurrenr+arrCurrentMessure[i])/5;
+				rRightPinForce:=(rRightPinForce+arrLeftPinMessure[i])/5;	
+				rLeftPinForce:=(rLeftPinForce+arrRightPinMessure[i])/5;	
+			END_FOR			
+		END_IF
+
+		
+	
+	30:// end movment, release motor until pins in close position
+		IF bLeftPistonSens AND nRightPistonSens THEN
+			rTimeToStop:=TIME_TO_REAL(StopTimer.ET);
+			TestState:=40;
+		END_IF
+
+	40:// write data to csv
+		IF bWriteDataEnd THEN
+			TestState:=0;
+		END_IF
+END_CASE
+
+IF ProcessTime.Q THEN
+	bTimeoutError:=TRUE;
+ELSE
+	bTimeoutError:=FALSE;	
+END_IF]]></ST>
+      </Implementation>
+    </Action>
+    <Action Name="SaveData" Id="{8533aea1-18e2-48a4-96a8-acf816fecb54}">
+      <Implementation>
+        <ST><![CDATA[sDataToWrite:=concat(REAL_TO_STRING(rRightPinForce),concat(',',concat(REAL_TO_STRING(rLeftPinForce),concat(',',concat(REAL_TO_STRING(rRecordMotorCurrenr),concat(',',concat(REAL_TO_STRING(rTimeToStop),concat(',',concat(BOOL_TO_STRING(bProcessEndAtPins),concat(',',concat(INT_TO_STRING(iPistonsForceHMI),'$N')))))))))));
+fbFileOpen(
+	sNetId:='' , 
+	sPathName:='C:\Users\Administrator\Desktop\Logs\Tests.csv ', // add controller path
+	nMode:=FOPEN_MODEAPPEND , 
+	ePath:= , 
+	bExecute:= , 
+	tTimeout:=T#3S , 
+	bBusy=> , 
+	bError=> , 
+	nErrId=> , 
+	hFile=> );
+fbFileWrite(
+	sNetId:='' , 
+	hFile:=fbFileOpen.hFile , 
+	pWriteBuff:=ADR(sDataToWrite) , 
+	cbWriteLen:=LEN(sDataToWrite) , 
+	bExecute:= , 
+	tTimeout:=T#3S , 
+	bBusy=> , 
+	bError=> , 
+	nErrId=> , 
+	cbWrite=> );
+fbFileClose(
+	sNetId:='' , 
+	hFile:=fbFileOpen.hFile , 
+	bExecute:= , 
+	tTimeout:=T#3S , 
+	bBusy=> , 
+	bError=> , 
+	nErrId=> );			
+
+CASE CSVstate OF
+	0://standby
+	fbFileOpen.bExecute:=FALSE;
+	fbFileWrite.bExecute:=FALSE;
+	fbFileClose.bExecute:=FALSE;
+		IF TestState=40 THEN
+			CSVstate:=10;
+		END_IF
+	10:// open file
+		fbFileOpen.bExecute:=TRUE;
+		IF fbFileOpen.bBusy AND NOT fbFileOpen.bError THEN
+			CSVstate:=15;
+		END_IF	
+	15:		
+		IF NOT fbFileOpen.bError AND NOT fbFileOpen.bBusy THEN
+			CSVstate:=20;
+		END_IF	
+	20:// write data
+		fbFileWrite.bExecute:=TRUE;
+		IF fbFileWrite.bBusy AND NOT fbFileWrite.bError THEN
+			CSVstate:=25;
+		END_IF		
+	25:
+		IF NOT fbFileWrite.bError AND NOT fbFileWrite.bBusy THEN
+			CSVstate:=30;
+		END_IF	
+	30:// close file
+		fbFileClose.bExecute:=TRUE;
+		IF fbFileClose.bBusy AND NOT fbFileClose.bError THEN
+			CSVstate:=35;
+		END_IF			
+	35:
+		IF NOT fbFileClose.bError AND NOT fbFileClose.bBusy THEN
+			CSVstate:=0;
+			bWriteDataEnd:=TRUE;
+		END_IF
+	
+END_CASE]]></ST>
+      </Implementation>
+    </Action>
+    <Action Name="SideTest" Id="{9e883c13-895d-435b-85cd-e984651cd211}">
+      <Implementation>
+        <ST><![CDATA[
+RunTimer(IN:= , PT:=T#1S , Q=> , ET=> );
+StopTimer(IN:= , PT:=T#500MS , Q=> , ET=> );
+
+CASE TestState OF
+	0://standby
+	StopTimer.IN:=FALSE;	
+	RunTimer.IN:=FALSE;
+		IF bStartTest THEN
+			TestState:=10;
+		END_IF
+	
+	10:// start movment
+
+		RunTimer.IN:=TRUE;
+		iMotorPower:=30;
+		
+		IF RunTimer.Q THEN
+			RunTimer.IN:=FALSE;
+			iMotorPower:=0;	
+			TestState:=20;
+		END_IF	
+	
+	20:// end movment
+		StopTimer.IN:=TRUE;	
+		IF 	StopTimer.Q THEN
+			TestState:=0;
+		END_IF
+
+
+END_CASE]]></ST>
+      </Implementation>
+    </Action>
+    <LineIds Name="MAIN">
+      <LineId Id="307" Count="1" />
+      <LineId Id="310" Count="0" />
+      <LineId Id="309" Count="0" />
+      <LineId Id="177" Count="0" />
+      <LineId Id="260" Count="0" />
+      <LineId Id="52" Count="0" />
+      <LineId Id="142" Count="0" />
+      <LineId Id="96" Count="0" />
+    </LineIds>
+    <LineIds Name="MAIN.RunTest">
+      <LineId Id="2" Count="1" />
+      <LineId Id="37" Count="0" />
+      <LineId Id="90" Count="0" />
+      <LineId Id="84" Count="1" />
+      <LineId Id="88" Count="1" />
+      <LineId Id="86" Count="0" />
+      <LineId Id="100" Count="0" />
+      <LineId Id="103" Count="0" />
+      <LineId Id="105" Count="1" />
+      <LineId Id="104" Count="0" />
+      <LineId Id="101" Count="1" />
+      <LineId Id="99" Count="0" />
+      <LineId Id="4" Count="3" />
+      <LineId Id="57" Count="0" />
+      <LineId Id="60" Count="0" />
+      <LineId Id="59" Count="0" />
+      <LineId Id="61" Count="0" />
+      <LineId Id="8" Count="0" />
+      <LineId Id="51" Count="1" />
+      <LineId Id="83" Count="0" />
+      <LineId Id="55" Count="0" />
+      <LineId Id="53" Count="0" />
+      <LineId Id="12" Count="3" />
+      <LineId Id="113" Count="1" />
+      <LineId Id="16" Count="5" />
+      <LineId Id="69" Count="0" />
+      <LineId Id="63" Count="1" />
+      <LineId Id="72" Count="1" />
+      <LineId Id="71" Count="0" />
+      <LineId Id="65" Count="2" />
+      <LineId Id="75" Count="1" />
+      <LineId Id="68" Count="0" />
+      <LineId Id="62" Count="0" />
+      <LineId Id="98" Count="0" />
+      <LineId Id="70" Count="0" />
+      <LineId Id="91" Count="0" />
+      <LineId Id="94" Count="1" />
+      <LineId Id="97" Count="0" />
+      <LineId Id="111" Count="1" />
+      <LineId Id="115" Count="1" />
+      <LineId Id="110" Count="0" />
+      <LineId Id="96" Count="0" />
+      <LineId Id="109" Count="0" />
+      <LineId Id="92" Count="1" />
+      <LineId Id="27" Count="1" />
+      <LineId Id="39" Count="0" />
+      <LineId Id="78" Count="0" />
+      <LineId Id="40" Count="0" />
+      <LineId Id="44" Count="0" />
+      <LineId Id="30" Count="0" />
+      <LineId Id="56" Count="0" />
+      <LineId Id="79" Count="1" />
+      <LineId Id="31" Count="5" />
+      <LineId Id="1" Count="0" />
+    </LineIds>
+    <LineIds Name="MAIN.SaveData">
+      <LineId Id="2" Count="0" />
+      <LineId Id="71" Count="9" />
+      <LineId Id="68" Count="0" />
+      <LineId Id="81" Count="9" />
+      <LineId Id="69" Count="0" />
+      <LineId Id="92" Count="6" />
+      <LineId Id="91" Count="0" />
+      <LineId Id="70" Count="0" />
+      <LineId Id="1" Count="0" />
+      <LineId Id="3" Count="0" />
+      <LineId Id="99" Count="2" />
+      <LineId Id="5" Count="0" />
+      <LineId Id="13" Count="1" />
+      <LineId Id="6" Count="0" />
+      <LineId Id="9" Count="0" />
+      <LineId Id="30" Count="0" />
+      <LineId Id="32" Count="0" />
+      <LineId Id="31" Count="0" />
+      <LineId Id="29" Count="0" />
+      <LineId Id="26" Count="2" />
+      <LineId Id="10" Count="1" />
+      <LineId Id="48" Count="1" />
+      <LineId Id="37" Count="0" />
+      <LineId Id="33" Count="0" />
+      <LineId Id="50" Count="1" />
+      <LineId Id="34" Count="0" />
+      <LineId Id="12" Count="0" />
+      <LineId Id="15" Count="0" />
+      <LineId Id="62" Count="1" />
+      <LineId Id="61" Count="0" />
+      <LineId Id="35" Count="0" />
+      <LineId Id="65" Count="2" />
+      <LineId Id="64" Count="0" />
+      <LineId Id="36" Count="0" />
+      <LineId Id="4" Count="0" />
+    </LineIds>
+    <LineIds Name="MAIN.SideTest">
+      <LineId Id="2" Count="2" />
+      <LineId Id="9" Count="2" />
+      <LineId Id="63" Count="1" />
+      <LineId Id="14" Count="0" />
+      <LineId Id="24" Count="3" />
+      <LineId Id="32" Count="4" />
+      <LineId Id="38" Count="1" />
+      <LineId Id="41" Count="0" />
+      <LineId Id="48" Count="2" />
+      <LineId Id="54" Count="0" />
+      <LineId Id="60" Count="2" />
+      <LineId Id="55" Count="0" />
+      <LineId Id="59" Count="0" />
+      <LineId Id="1" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

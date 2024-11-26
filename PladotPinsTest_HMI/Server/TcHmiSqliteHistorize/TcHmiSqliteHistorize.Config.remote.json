@@ -1,0 +1,19 @@
+{
+    "enableBackup": false,
+    "historizedSymbolList": {
+        "PLC1.MAIN.rHMI_MotorCurrent": {
+            "interval": "PT0.01S",
+            "maxEntries": 10000,
+            "recordingEnabled": true,
+            "rowLimit": 100000
+        },
+        "PLC1.MAIN.rMotorCurrenr": {
+            "interval": "PT0.01S",
+            "maxEntries": 10000,
+            "recordingEnabled": true,
+            "rowLimit": 100000
+        }
+    },
+    "inMemory": false,
+    "maxBackups": 1
+}
